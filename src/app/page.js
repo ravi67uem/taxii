@@ -41,7 +41,7 @@ export default function Home() {
         {/* Pulsing & Floating Logo Container */}
         <img
           src="/logo.png"
-          alt="Magadh EV Cabs Logo"
+          alt="Taxii Logo"
           className="logo-pulse"
           style={{
             height: '130px',
@@ -59,7 +59,7 @@ export default function Home() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {/* Main Title Banner */}
           <h1 style={{
-            fontSize: '3rem',
+            fontSize: '3.5rem',
             fontWeight: '900',
             letterSpacing: '-0.03em',
             margin: 0,
@@ -74,7 +74,7 @@ export default function Home() {
           
           {/* Subtle Tagline */}
           <p style={{
-            fontSize: '1.1rem',
+            fontSize: '1.15rem',
             color: 'var(--text-muted)',
             margin: '0 auto',
             fontWeight: '400',
@@ -82,7 +82,7 @@ export default function Home() {
             maxWidth: '520px',
             lineHeight: '1.6'
           }}>
-            Magadh EV Cabs is preparing Bihar's first premium, fully-electric taxi fleet. Clean, silent, and smart rides are on the way.
+            Taxii is preparing Bihar's first premium, fully-electric smart taxi fleet. Clean, silent, and reliable rides are on the way.
           </p>
         </div>
 

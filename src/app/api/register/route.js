@@ -60,7 +60,7 @@ export async function POST(request) {
     // If MongoDB is configured
     if (clientPromise) {
       const client = await clientPromise;
-      const db = client.db('magadh_ev_taxi');
+      const db = client.db('taxii');
       
       // Check if email already registered
       const existing = await db.collection('registrations').findOne({ email, role });

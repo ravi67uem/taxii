@@ -8,7 +8,7 @@ export async function GET() {
     // Check if MongoDB is configured
     if (clientPromise) {
       const client = await clientPromise;
-      const db = client.db('magadh_ev_taxi');
+      const db = client.db('taxii');
       
       const ridersCount = await db.collection('registrations').countDocuments({ role: 'rider' });
       const driversCount = await db.collection('registrations').countDocuments({ role: 'driver' });
