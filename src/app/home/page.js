@@ -55,13 +55,13 @@ export default function HomePage() {
       {/* HERO SECTION */}
       <section id="hero" className="hero-section">
         {/* Background landscape image spanning full 90vh/100vw */}
-        <img 
-          src="/assets/hero-bg.png" 
-          alt="Taxii Premium Ride Electric Varanasi Ganga Ghat" 
-          className="hero-bg-img" 
+        <img
+          src="/assets/hero-bg.png"
+          alt="Taxii Premium Ride Electric Varanasi Ganga Ghat"
+          className="hero-bg-img"
         />
         {/* Soft shadow/fade overlay */}
-        <div className="hero-overlay"></div>
+        <div className=""></div>
 
         {/* Hero title text positioned above the visual elements in the sky */}
         <div className="hero-content">
@@ -195,8 +195,8 @@ export default function HomePage() {
             <button className="modal-close-btn" onClick={() => setModalOpen(false)} aria-label="Close modal">
               &times;
             </button>
-            <RegistrationForm 
-              isLoginMode={isLoginMode} 
+            <RegistrationForm
+              isLoginMode={isLoginMode}
               onSwitchMode={() => setIsLoginMode(!isLoginMode)}
               onSuccess={handleRegistrationSuccess}
             />
