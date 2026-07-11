@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://cdn.jsdelivr.net/npm/@fontsource-variable/google-sans-flex@latest/index.css');
 
 :root {
   /* Editorial Classic Color Scheme */
@@ -8,10 +9,105 @@
   --border-color: #e4e4e7;  /* Fine border line gray */
   --accent-color: #0f766e;  /* Deep forest green/teal, used very subtly */
   
-  --font-serif: 'Lora', Georgia, serif;
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  /* Brand Green colors */
+  --primary: #7BB928;
+  --primary-hover: #68a31e;
+  --primary-light: rgba(123, 185, 40, 0.15);
+  
+  /* Form variables */
+  --secondary: #eab308;
+  --glass-border: rgba(228, 228, 231, 0.6);
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --shadow-premium: 0 10px 30px rgba(0, 0, 0, 0.05);
+
+  --font-serif: 'Google Sans Flex Variable', sans-serif;
+  --font-sans: 'Google Sans Flex Variable', sans-serif;
   
   --transition-classic: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* Glass Card styling */
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: var(--shadow-premium);
+  transition: var(--transition-smooth);
+}
+
+/* Form layout */
+.form-group {
+  margin-bottom: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.form-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-main);
+  margin-bottom: 0.5rem;
+  display: block;
+}
+
+.form-control {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  font-size: 0.95rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: #ffffff;
+  color: var(--text-main);
+  font-family: inherit;
+  transition: var(--transition-smooth);
+  outline: none;
+}
+
+.form-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+/* Button UI */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+  font-family: inherit;
+  text-decoration: none;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--primary);
+  color: #ffffff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(123, 185, 40, 0.2);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 /* Base Reset */
@@ -22,11 +118,10 @@
 }
 
 html, body {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  min-height: 100vh;
   margin: 0;
   padding: 0;
-  overflow: hidden;
   background-color: var(--bg-color);
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
@@ -35,9 +130,16 @@ html, body {
 
 body {
   font-family: var(--font-sans);
+}
+
+.preparing-wrapper {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   justify-content: center;
   align-items: center;
+  background-color: var(--bg-color);
 }
 
 /* Subtle page reveal animation */
