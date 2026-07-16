@@ -2,11 +2,17 @@
 
 import { useState } from 'react';
 import RegistrationForm from '@/components/RegistrationForm';
+import BookingWidget from '@/components/BookingWidget';
+import { db, isConfigured } from '@/lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 import './page.css';
 
 export default function HomePage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [isLoginMode, setIsLoginMode] = useState(false);
+  const [prefilledPhone, setPrefilledPhone] = useState('');
+  const [pendingBooking, setPendingBooking] = useState(null);
+  const [successBookingMessage, setSuccessBookingMessage] = useState('');
   const [faqOpen, setFaqOpen] = useState({ 0: true });
 
   const toggleFaq = (index) => {
@@ -16,15 +22,62 @@ export default function HomePage() {
     }));
   };
 
-  const openModal = (login = false) => {
+  const openModal = (login = false, phone = '') => {
+    setPrefilledPhone(phone);
     setIsLoginMode(login);
     setModalOpen(true);
   };
 
-  const handleRegistrationSuccess = (userData) => {
+  const handleBookingSearchStart = (bookingDetails) => {
+    setPendingBooking(bookingDetails);
+    openModal(false, bookingDetails.phone); // Open registration/OTP flow with phone pre-filled
+  };
+
+  const handleRegistrationSuccess = async (userData) => {
     console.log("Success callback data:", userData);
-    // Keep modal open briefly to show the green success bar inside the form,
-    // then close it or redirect
+    
+    if (pendingBooking) {
+      const bookingPayload = {
+        ...pendingBooking,
+        uid: userData.uid,
+        phone: userData.phone.startsWith('+91') ? userData.phone.replace('+91', '') : userData.phone
+      };
+
+      // 1. Write booking to Cloud Firestore if configured
+      if (isConfigured && db) {
+        try {
+          await addDoc(collection(db, 'bookings'), {
+            ...bookingPayload,
+            createdAt: new Date().toISOString()
+          });
+          console.log("Booking saved to Cloud Firestore successfully.");
+        } catch (fsErr) {
+          console.error("Failed to save booking to Firestore:", fsErr);
+        }
+      }
+
+      // 2. Post booking to MongoDB backend API
+      try {
+        const res = await fetch('/api/booking', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bookingPayload)
+        });
+        if (!res.ok) {
+          console.warn("Failed to sync booking to MongoDB.");
+        } else {
+          console.log("Booking synced to MongoDB successfully.");
+        }
+      } catch (apiErr) {
+        console.error("Failed to post booking to MongoDB:", apiErr);
+      }
+
+      setSuccessBookingMessage(
+        `Your price of ₹${pendingBooking.fare} has been locked! A professional chauffeur will be assigned for your trip from "${pendingBooking.pickup}" to "${pendingBooking.drop}" on ${new Date(pendingBooking.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} at ${pendingBooking.time}. Early access details have been linked to your phone number +91 ${bookingPayload.phone}.`
+      );
+      setPendingBooking(null);
+    }
+
     setTimeout(() => {
       setModalOpen(false);
     }, 2000);
@@ -68,6 +121,9 @@ export default function HomePage() {
           <h1 className="hero-title">Ride Premium. Ride Electric. Ride Taxii.</h1>
         </div>
       </section>
+
+      {/* BOOKING SEARCH SECTION */}
+      <BookingWidget onSearchStart={handleBookingSearchStart} />
 
       {/* VALUE PROPOSITION / FEATURES SECTION */}
       <section id="about" className="features-section">
@@ -199,10 +255,45 @@ export default function HomePage() {
               isLoginMode={isLoginMode}
               onSwitchMode={() => setIsLoginMode(!isLoginMode)}
               onSuccess={handleRegistrationSuccess}
+              initialPhone={prefilledPhone}
             />
           </div>
         </div>
       )}
+
+      {/* BOOKING CONFIRMATION MODAL */}
+      {successBookingMessage && (
+        <div className="fare-modal-overlay" onClick={() => setSuccessBookingMessage('')}>
+          <div className="fare-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button className="btn-modal-close" onClick={() => setSuccessBookingMessage('')} aria-label="Close modal">
+              &times;
+            </button>
+            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🎉</div>
+            <h4 className="fare-modal-title">Booking Confirmed!</h4>
+            <p className="fare-modal-subtitle" style={{ color: '#025e4f', fontWeight: '700', fontSize: '1rem', marginBottom: '1rem' }}>
+              Your Ride Waitlist Spot is Locked!
+            </p>
+            <p style={{ fontSize: '0.9rem', color: '#52525b', lineHeight: '1.6', marginBottom: '1.75rem', textAlign: 'left' }}>
+              {successBookingMessage}
+            </p>
+            <button 
+              type="button"
+              className="btn-get-started" 
+              onClick={() => setSuccessBookingMessage('')}
+              style={{ width: '100%', padding: '0.85rem' }}
+            >
+              Back to Home
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING SUPPORT CALL BUTTON */}
+      <a href="tel:+919600111444" className="floating-call-btn" aria-label="Call Support" title="Call Support">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+        </svg>
+      </a>
     </div>
   );
 }

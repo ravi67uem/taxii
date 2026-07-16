@@ -1,15 +1,18 @@
 'use client';
 
-import { useState } from 'react';
-import { auth, storage, isConfigured } from '@/lib/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { useState, useEffect } from 'react';
+import { auth, storage, db, isConfigured } from '@/lib/firebase';
+import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
-export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode = false }) {
+export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode = false, initialPhone = '' }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState(initialPhone || ''); // Stores the 10-digit number (digits only)
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [confirmationResult, setConfirmationResult] = useState(null);
   const [role, setRole] = useState('rider'); // 'rider' or 'driver'
   const [documentFile, setDocumentFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -17,9 +20,105 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  // Clean up recaptcha verifier when component unmounts
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && window.recaptchaVerifier) {
+        try {
+          window.recaptchaVerifier.clear();
+        } catch (e) {
+          console.error("Error clearing recaptcha verifier:", e);
+        }
+        window.recaptchaVerifier = null;
+      }
+    };
+  }, []);
+
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       setDocumentFile(e.target.files[0]);
+    }
+  };
+
+  const handleSwitchMode = () => {
+    setName('');
+    setPhone('');
+    setEmail('');
+    setOtpCode('');
+    setOtpSent(false);
+    setConfirmationResult(null);
+    setError('');
+    setSuccessMsg('');
+    if (onSwitchMode) {
+      onSwitchMode();
+    }
+  };
+
+  const handleSendOtp = async (e) => {
+    if (e) e.preventDefault();
+    setError('');
+    setSuccessMsg('');
+    setLoading(true);
+
+    if (!phone || phone.length !== 10) {
+      setError("Please enter a valid 10-digit mobile number.");
+      setLoading(false);
+      return;
+    }
+
+    // For registration mode, validate details before sending OTP
+    if (!isLoginMode) {
+      if (!name.trim()) {
+        setError("Please enter your full name.");
+        setLoading(false);
+        return;
+      }
+      if (!email.trim() || !email.includes('@')) {
+        setError("Please enter a valid email address.");
+        setLoading(false);
+        return;
+      }
+      if (role === 'driver' && !documentFile) {
+        setError("Please upload your Driving License or Identity Card.");
+        setLoading(false);
+        return;
+      }
+    }
+
+    const formattedPhone = `+91${phone}`;
+
+    try {
+      if (isConfigured && auth) {
+        // Prepare recaptcha DOM element and constructor
+        if (window.recaptchaVerifier) {
+          try {
+            window.recaptchaVerifier.clear();
+          } catch (e) {}
+          window.recaptchaVerifier = null;
+        }
+
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          size: 'invisible',
+          callback: () => {}
+        });
+
+        const appVerifier = window.recaptchaVerifier;
+        const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
+        
+        setConfirmationResult(confirmation);
+        setOtpSent(true);
+        setSuccessMsg(`Verification code sent to ${formattedPhone}.`);
+      } else {
+        // Mock mode sending OTP
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+        setOtpSent(true);
+        setSuccessMsg(`[Demo Mode] OTP sent to ${formattedPhone}. Use code 123456 to verify.`);
+      }
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to send OTP code. Please verify your number.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -29,66 +128,107 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
     setSuccessMsg('');
     setLoading(true);
 
+    if (!otpCode || otpCode.length !== 6) {
+      setError("Please enter the 6-digit verification code.");
+      setLoading(false);
+      return;
+    }
+
+    const formattedPhone = `+91${phone}`;
+
     try {
-      if (isLoginMode) {
-        // --- LOGIN FLOW ---
-        let uid = 'mock-uid-123';
-        let loggedInRole = 'rider';
+      let uid = `mock-uid-${Date.now()}`;
 
-        if (isConfigured && auth) {
-          const userCredential = await signInWithEmailAndPassword(auth, email, password);
-          uid = userCredential.user.uid;
-        } else {
-          // Simulate login delay
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
-
-        // Fetch user metadata from db to know their details or fallback to mock
+      if (isConfigured && auth && confirmationResult) {
         try {
-          // If we want to check their profile, we fetch from a endpoint or guess
-          // We'll set a success message and log in
-          if (email.includes('driver')) {
-            loggedInRole = 'driver';
-          }
-        } catch (e) {}
-
-        setSuccessMsg("Welcome back!");
-        if (onSuccess) {
-          onSuccess({
-            name: email.split('@')[0].toUpperCase(),
-            email,
-            role: loggedInRole,
-            uid,
-            isMock: !isConfigured,
-            isReturningUser: true,
-          });
+          const userCredential = await confirmationResult.confirm(otpCode);
+          uid = userCredential.user.uid;
+        } catch (confirmErr) {
+          throw new Error("Invalid verification code. Please check and try again.");
         }
       } else {
-        // --- REGISTRATION FLOW ---
-        let uid = `mock-uid-${Date.now()}`;
+        // Mock confirmation check
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (otpCode !== '123456') {
+          throw new Error("Invalid verification code. In Demo Mode, please use 123456.");
+        }
+      }
+
+      if (isLoginMode) {
+        // --- LOGIN VERIFICATION FLOW ---
+        try {
+          let userData = null;
+
+          // 1. Try reading profile from Cloud Firestore if configured
+          if (isConfigured && db) {
+            try {
+              const docSnap = await getDoc(doc(db, 'registrations', uid));
+              if (docSnap.exists()) {
+                userData = docSnap.data();
+                console.log("User profile fetched from Cloud Firestore:", userData);
+              }
+            } catch (fsErr) {
+              console.warn("Could not fetch user from Firestore, falling back to local DB:", fsErr);
+            }
+          }
+
+          // 2. Query MongoDB backend API for user verification and sync
+          const res = await fetch(`/api/user?phone=${encodeURIComponent(formattedPhone)}&uid=${uid}`);
+          if (!res.ok) {
+            // User profile not found in MongoDB
+            if (userData) {
+              // Redundancy check: Sync Firestore record to MongoDB if it exists in Firestore
+              try {
+                await fetch('/api/register', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    name: userData.name,
+                    email: userData.email,
+                    phone: formattedPhone,
+                    role: userData.role,
+                    uid: uid,
+                    documentUrl: userData.documentUrl
+                  })
+                });
+                console.log("Synchronized Firestore profile to MongoDB successfully.");
+              } catch (syncErr) {
+                console.error("Failed to sync profile to MongoDB:", syncErr);
+              }
+            } else {
+              // Not registered anywhere!
+              setOtpSent(false);
+              setOtpCode('');
+              setError("No account found for this phone number. We pre-filled it—please register below.");
+              if (onSwitchMode) {
+                onSwitchMode(); // Switch parent to register mode
+              }
+              return;
+            }
+          }
+
+          // Fetch user details from MongoDB response if Firestore query didn't execute/find it
+          if (!userData) {
+            const data = await res.json();
+            userData = data.user;
+          }
+
+          setSuccessMsg(`Welcome back, ${userData.name}!`);
+          if (onSuccess) {
+            onSuccess({
+              ...userData,
+              isMock: !isConfigured,
+              isReturningUser: true,
+            });
+          }
+        } catch (err) {
+          throw new Error(err.message || "Failed to fetch user profile details.");
+        }
+      } else {
+        // --- REGISTRATION VERIFICATION FLOW ---
         let docUrl = null;
 
-        // Validate password length
-        if (password.length < 6) {
-          throw new Error("Password must be at least 6 characters long.");
-        }
-
-        // 1. Firebase Auth Signup
-        if (isConfigured && auth) {
-          try {
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            uid = userCredential.user.uid;
-          } catch (authErr) {
-            if (authErr.code === 'auth/email-already-in-use') {
-              throw new Error("This email is already registered in Firebase. Try logging in.");
-            }
-            throw authErr;
-          }
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-
-        // 2. Document Upload (Drivers only)
+        // 1. Upload Driver License (Drivers only)
         if (role === 'driver') {
           if (!documentFile) {
             throw new Error("Please upload your Driving License or Identity Card.");
@@ -118,20 +258,33 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
               setUploadProgress(p);
               await new Promise((r) => setTimeout(r, 200));
             }
-            docUrl = `https://mockstorage.googleapis.com/v0/b/magadh-ev/o/drivers%2F${uid}%2Flicense.png`;
+            docUrl = `https://mockstorage.googleapis.com/v0/b/magadh/o/drivers%2F${uid}%2Flicense.png`;
           }
         }
 
-        // 3. Post to local MongoDB backend API
+        // 2. Prepare payload
         const apiPayload = {
           name,
           email,
-          phone,
+          phone: formattedPhone,
           role,
           uid,
-          documentUrl: docUrl
+          documentUrl: docUrl,
+          createdAt: new Date().toISOString()
         };
 
+        // 3. Write profile to Cloud Firestore
+        if (isConfigured && db) {
+          try {
+            await setDoc(doc(db, 'registrations', uid), apiPayload);
+            console.log("Successfully stored profile document in Cloud Firestore.");
+          } catch (fsErr) {
+            console.error("Firestore write failed:", fsErr);
+            throw new Error("Failed to write to Cloud Firestore: " + fsErr.message);
+          }
+        }
+
+        // 4. Save user profile to MongoDB database
         const res = await fetch('/api/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -140,15 +293,15 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
 
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.error || "Failed to register profile. Please try again.");
+          throw new Error(data.error || "Failed to save registration profile to MongoDB.");
         }
 
-        setSuccessMsg("Registration successful! Welcome to the squad.");
+        setSuccessMsg("Registration successful! Welcome to The Taxii.");
         if (onSuccess) {
           onSuccess({
             name,
             email,
-            phone,
+            phone: formattedPhone,
             role,
             uid,
             documentUrl: docUrl,
@@ -159,7 +312,7 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "An error occurred during submission.");
+      setError(err.message || "Verification failed. Please try again.");
     } finally {
       setLoading(false);
       setUploadProgress(0);
@@ -174,7 +327,7 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
         </h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
           {isLoginMode 
-            ? 'Access your Magadh EV driver or rider account' 
+            ? 'Access your Magadh driver or rider account' 
             : 'Join the eco-friendly mobility revolution in Bihar'}
         </p>
       </div>
@@ -190,7 +343,7 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
           marginBottom: '1.25rem',
           textAlign: 'center'
         }}>
-          💡 Running in <strong>Demo Mode</strong>. Registration is simulated in-memory and Firebase SDK is bypassed.
+          💡 Running in <strong>Demo Mode</strong>. Phone OTP verification is simulated.
         </div>
       )}
 
@@ -222,174 +375,264 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
         </div>
       )}
 
-      <form onSubmit={handleSubmit}>
-        {!isLoginMode && (
-          <>
-            {/* Role Picker */}
-            <div style={{ marginBottom: '1.25rem' }}>
-              <span className="form-label">Are you registering as a Rider or Driver?</span>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
-                <button
-                  type="button"
-                  onClick={() => setRole('rider')}
-                  style={{
-                    padding: '0.6rem',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '0.9rem',
-                    fontWeight: '600',
-                    border: role === 'rider' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
-                    backgroundColor: role === 'rider' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
-                    color: role === 'rider' ? 'var(--primary)' : 'var(--text-main)',
-                    transition: 'var(--transition-smooth)'
-                  }}
-                >
-                  🚴 Rider / Passenger
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRole('driver')}
-                  style={{
-                    padding: '0.6rem',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '0.9rem',
-                    fontWeight: '600',
-                    border: role === 'driver' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
-                    backgroundColor: role === 'driver' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
-                    color: role === 'driver' ? 'var(--primary)' : 'var(--text-main)',
-                    transition: 'var(--transition-smooth)'
-                  }}
-                >
-                  🚖 Fleet Partner / Driver
-                </button>
-              </div>
-            </div>
+      {/* Hidden Recaptcha container */}
+      <div id="recaptcha-container"></div>
 
-            <div className="form-group">
-              <label className="form-label" htmlFor="reg-name">Full Name</label>
+      {!otpSent ? (
+        <form onSubmit={handleSendOtp}>
+          {!isLoginMode && (
+            <>
+              {/* Role Picker */}
+              <div style={{ marginBottom: '1.25rem' }}>
+                <span className="form-label">Are you registering as a Rider or Driver?</span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => setRole('rider')}
+                    style={{
+                      padding: '0.6rem',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                      fontWeight: '600',
+                      border: role === 'rider' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
+                      backgroundColor: role === 'rider' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                      color: role === 'rider' ? 'var(--primary)' : 'var(--text-main)',
+                      transition: 'var(--transition-smooth)'
+                    }}
+                  >
+                    🚴 Rider / Passenger
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRole('driver')}
+                    style={{
+                      padding: '0.6rem',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '0.9rem',
+                      fontWeight: '600',
+                      border: role === 'driver' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
+                      backgroundColor: role === 'driver' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                      color: role === 'driver' ? 'var(--primary)' : 'var(--text-main)',
+                      transition: 'var(--transition-smooth)'
+                    }}
+                  >
+                    🚖 Fleet Partner / Driver
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="reg-name">Full Name</label>
+                <input
+                  id="reg-name"
+                  type="text"
+                  className="form-control"
+                  placeholder="Enter your name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={loading}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="reg-email">Email Address</label>
+                <input
+                  id="reg-email"
+                  type="email"
+                  className="form-control"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={loading}
+                  required
+                />
+              </div>
+            </>
+          )}
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="reg-phone">Phone Number</label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <span style={{
+                padding: '0.65rem 0.75rem',
+                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid var(--glass-border)',
+                borderRadius: '8px',
+                fontSize: '0.9rem',
+                color: 'var(--text-main)',
+                fontWeight: '600'
+              }}>
+                +91
+              </span>
               <input
-                id="reg-name"
-                type="text"
+                id="reg-phone"
+                type="tel"
                 className="form-control"
-                placeholder="Enter your name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                placeholder="XXXXXXXXXX"
+                value={phone}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, ''); // numbers only
+                  if (val.length <= 10) setPhone(val);
+                }}
+                disabled={loading}
+                required
+                style={{ flex: 1, marginTop: 0 }}
+              />
+            </div>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              We will send a 6-digit verification code to this number.
+            </p>
+          </div>
+
+          {!isLoginMode && role === 'driver' && (
+            <div className="form-group" style={{
+              padding: '1rem',
+              backgroundColor: 'rgba(255, 255, 255, 0.02)',
+              borderRadius: '10px',
+              border: '1px dashed var(--glass-border)',
+              marginTop: '1.5rem'
+            }}>
+              <label className="form-label" htmlFor="reg-doc" style={{ marginBottom: '0.25rem' }}>
+                Upload Driving License / Aadhar Card
+              </label>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+                Required for early onboarding validation. PDF, JPG, PNG accepted.
+              </p>
+              <input
+                id="reg-doc"
+                type="file"
+                accept=".pdf,image/*"
+                onChange={handleFileChange}
+                style={{
+                  fontSize: '0.8rem',
+                  color: 'var(--text-muted)'
+                }}
+                disabled={loading}
                 required
               />
             </div>
-          </>
-        )}
-
-        <div className="form-group">
-          <label className="form-label" htmlFor="reg-email">Email Address</label>
-          <input
-            id="reg-email"
-            type="email"
-            className="form-control"
-            placeholder={isLoginMode ? "email@example.com" : "you@example.com"}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
-
-        {!isLoginMode && (
-          <div className="form-group">
-            <label className="form-label" htmlFor="reg-phone">Phone Number (WhatsApp preferred)</label>
-            <input
-              id="reg-phone"
-              type="tel"
-              className="form-control"
-              placeholder="+91 XXXXX XXXXX"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-          </div>
-        )}
-
-        <div className="form-group">
-          <label className="form-label" htmlFor="reg-pass">Password</label>
-          <input
-            id="reg-pass"
-            type="password"
-            className="form-control"
-            placeholder="At least 6 characters"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-
-        {!isLoginMode && role === 'driver' && (
-          <div className="form-group" style={{
-            padding: '1rem',
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
-            borderRadius: '10px',
-            border: '1px dashed var(--glass-border)',
-            marginTop: '1.5rem'
-          }}>
-            <label className="form-label" htmlFor="reg-doc" style={{ marginBottom: '0.25rem' }}>
-              Upload Driving License / Aadhar Card
-            </label>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-              Required for early onboarding validation. PDF, JPG, PNG accepted.
-            </p>
-            <input
-              id="reg-doc"
-              type="file"
-              accept=".pdf,image/*"
-              onChange={handleFileChange}
-              style={{
-                fontSize: '0.8rem',
-                color: 'var(--text-muted)'
-              }}
-              required
-            />
-            {uploadProgress > 0 && (
-              <div style={{ marginTop: '0.75rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-                  <span>Uploading file...</span>
-                  <span>{uploadProgress}%</span>
-                </div>
-                <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{ width: `${uploadProgress}%`, height: '100%', background: 'var(--primary)', transition: 'width 0.1s linear' }}></div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          className="btn btn-primary"
-          disabled={loading}
-          style={{ width: '100%', marginTop: '1.25rem' }}
-        >
-          {loading ? (
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span className="spinner" style={{
-                width: '16px',
-                height: '16px',
-                border: '2px solid rgba(255,255,255,0.3)',
-                borderTopColor: '#fff',
-                borderRadius: '50%',
-                animation: 'spin 0.8s linear infinite'
-              }}></span>
-              Processing...
-            </span>
-          ) : (
-            isLoginMode ? 'Sign In' : `Register as ${role === 'driver' ? 'Driver Partner' : 'Rider'}`
           )}
-        </button>
-      </form>
+
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={loading}
+            style={{ width: '100%', marginTop: '1.25rem' }}
+          >
+            {loading ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                <span className="spinner" style={{
+                  width: '16px',
+                  height: '16px',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTopColor: '#fff',
+                  borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite'
+                }}></span>
+                Sending...
+              </span>
+            ) : (
+              isLoginMode ? 'Send Verification OTP' : 'Send Registration OTP'
+            )}
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label className="form-label" htmlFor="otp-code">Enter Verification Code</label>
+            <input
+              id="otp-code"
+              type="text"
+              className="form-control"
+              placeholder="123456"
+              maxLength={6}
+              value={otpCode}
+              onChange={(e) => {
+                const val = e.target.value.replace(/\D/g, ''); // numbers only
+                if (val.length <= 6) setOtpCode(val);
+              }}
+              disabled={loading}
+              required
+              style={{
+                letterSpacing: otpCode ? '0.5rem' : 'normal',
+                textAlign: otpCode ? 'center' : 'left',
+                fontSize: otpCode ? '1.5rem' : '1rem',
+                fontWeight: '600'
+              }}
+            />
+          </div>
+
+          {loading && uploadProgress > 0 && (
+            <div style={{ marginTop: '0.75rem', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
+                <span>Uploading document...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{ width: `${uploadProgress}%`, height: '100%', background: 'var(--primary)', transition: 'width 0.1s linear' }}></div>
+              </div>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={loading || otpCode.length !== 6}
+            style={{ width: '100%', marginTop: '1.25rem' }}
+          >
+            {loading ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'center' }}>
+                <span className="spinner" style={{
+                  width: '16px',
+                  height: '16px',
+                  border: '2px solid rgba(255,255,255,0.3)',
+                  borderTopColor: '#fff',
+                  borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite'
+                }}></span>
+                Verifying...
+              </span>
+            ) : (
+              isLoginMode ? 'Verify & Sign In' : 'Verify & Register'
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOtpSent(false);
+              setOtpCode('');
+              setError('');
+              setSuccessMsg('');
+            }}
+            disabled={loading}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              fontSize: '0.85rem',
+              marginTop: '1rem',
+              display: 'block',
+              width: '100%',
+              textAlign: 'center'
+            }}
+          >
+            ← Back to phone number
+          </button>
+        </form>
+      )}
 
       <div style={{ marginTop: '1.5rem', textAlign: 'center', fontSize: '0.85rem' }}>
         <span style={{ color: 'var(--text-muted)' }}>
           {isLoginMode ? "Don't have an account? " : "Already registered? "}
         </span>
         <button
-          onClick={onSwitchMode}
+          onClick={handleSwitchMode}
           style={{
             background: 'none',
             border: 'none',

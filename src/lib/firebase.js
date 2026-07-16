@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
+import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -9,6 +10,7 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
 // Check if Firebase is fully configured
@@ -22,12 +24,19 @@ const isConfigured = !!(
 let app;
 let auth = null;
 let storage = null;
+let db = null;
+let analytics = null;
 
 if (isConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
     storage = getStorage(app);
+    db = getFirestore(app);
+    if (typeof window !== 'undefined') {
+      const { getAnalytics } = require('firebase/analytics');
+      analytics = getAnalytics(app);
+    }
   } catch (error) {
     console.error("Failed to initialize Firebase SDK:", error);
   }
@@ -37,4 +46,4 @@ if (isConfigured) {
   }
 }
 
-export { app, auth, storage, isConfigured };
+export { app, auth, storage, db, analytics, isConfigured };
