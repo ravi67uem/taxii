@@ -19,6 +19,8 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [useMockFallback, setUseMockFallback] = useState(false);
+  const [showMockFallback, setShowMockFallback] = useState(false);
 
   // Clean up recaptcha verifier when component unmounts
   useEffect(() => {
@@ -52,6 +54,20 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
     if (onSwitchMode) {
       onSwitchMode();
     }
+  };
+
+  const handleBypassToMock = () => {
+    setUseMockFallback(true);
+    setError('');
+    setShowMockFallback(false);
+    setLoading(true);
+
+    const formattedPhone = `+91${phone}`;
+    setTimeout(() => {
+      setOtpSent(true);
+      setSuccessMsg(`[Demo Mode Override] OTP sent to ${formattedPhone}. Use code 123456 to verify.`);
+      setLoading(false);
+    }, 800);
   };
 
   const handleSendOtp = async (e) => {
@@ -88,7 +104,7 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
     const formattedPhone = `+91${phone}`;
 
     try {
-      if (isConfigured && auth) {
+      if (isConfigured && auth && !useMockFallback) {
         // Prepare recaptcha DOM element and constructor
         if (window.recaptchaVerifier) {
           try {
@@ -116,7 +132,14 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
       }
     } catch (err) {
       console.error(err);
-      setError(err.message || "Failed to send OTP code. Please verify your number.");
+      let errMsg = err.message || "Failed to send OTP code. Please verify your number.";
+      
+      if (errMsg.includes("operation-not-allowed") || errMsg.includes("region") || errMsg.includes("operation")) {
+        errMsg = "Firebase Error: SMS region policy is blocked. Please enable Phone Auth & allow India (+91) in your Firebase Console (Authentication > Settings > User Actions > SMS Region Policy).";
+      }
+      
+      setError(errMsg);
+      setShowMockFallback(true);
     } finally {
       setLoading(false);
     }
@@ -168,57 +191,45 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
                 console.log("User profile fetched from Cloud Firestore:", userData);
               }
             } catch (fsErr) {
-              console.warn("Could not fetch user from Firestore, falling back to local DB:", fsErr);
+              console.warn("Could not fetch user from Firestore:", fsErr);
             }
           }
 
-          // 2. Query MongoDB backend API for user verification and sync
-          const res = await fetch(`/api/user?phone=${encodeURIComponent(formattedPhone)}&uid=${uid}`);
-          if (!res.ok) {
-            // User profile not found in MongoDB
-            if (userData) {
-              // Redundancy check: Sync Firestore record to MongoDB if it exists in Firestore
-              try {
-                await fetch('/api/register', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    name: userData.name,
-                    email: userData.email,
-                    phone: formattedPhone,
-                    role: userData.role,
-                    uid: uid,
-                    documentUrl: userData.documentUrl
-                  })
-                });
-                console.log("Synchronized Firestore profile to MongoDB successfully.");
-              } catch (syncErr) {
-                console.error("Failed to sync profile to MongoDB:", syncErr);
-              }
-            } else {
-              // Not registered anywhere!
-              setOtpSent(false);
-              setOtpCode('');
-              setError("No account found for this phone number. We pre-filled it—please register below.");
-              if (onSwitchMode) {
-                onSwitchMode(); // Switch parent to register mode
-              }
-              return;
-            }
-          }
-
-          // Fetch user details from MongoDB response if Firestore query didn't execute/find it
+          // 2. Query MongoDB backend API for user verification (Optional fallback)
           if (!userData) {
-            const data = await res.json();
-            userData = data.user;
+            try {
+              const res = await fetch(`/api/user?phone=${encodeURIComponent(formattedPhone)}&uid=${uid}`);
+              if (res.ok) {
+                const data = await res.json();
+                userData = data.user;
+              }
+            } catch (apiErr) {
+              console.warn("MongoDB user lookup failed (ignored):", apiErr);
+            }
+          }
+
+          if (!userData) {
+            // Not registered anywhere!
+            setOtpSent(false);
+            setOtpCode('');
+            setError("No account found for this phone number. Please register below.");
+            if (onSwitchMode) {
+              onSwitchMode(); // Switch parent to register mode
+            }
+            return;
           }
 
           setSuccessMsg(`Welcome back, ${userData.name}!`);
           if (onSuccess) {
             onSuccess({
-              ...userData,
+              name: userData.name,
+              email: userData.email,
+              phone: formattedPhone,
+              role: userData.role,
+              uid: uid,
+              documentUrl: userData.documentUrl || '',
               isMock: !isConfigured,
-              isReturningUser: true,
+              isReturningUser: true
             });
           }
         } catch (err) {
@@ -273,7 +284,7 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
           createdAt: new Date().toISOString()
         };
 
-        // 3. Write profile to Cloud Firestore
+        // 3. Write profile to Cloud Firestore (Primary)
         if (isConfigured && db) {
           try {
             await setDoc(doc(db, 'registrations', uid), apiPayload);
@@ -284,16 +295,15 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
           }
         }
 
-        // 4. Save user profile to MongoDB database
-        const res = await fetch('/api/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(apiPayload)
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to save registration profile to MongoDB.");
+        // 4. Save user profile to MongoDB database (Optional background sync)
+        try {
+          await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(apiPayload)
+          });
+        } catch (apiErr) {
+          console.warn("MongoDB sync failed (ignored):", apiErr);
         }
 
         setSuccessMsg("Registration successful! Welcome to The Taxii.");
@@ -352,12 +362,34 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
           backgroundColor: 'rgba(239, 68, 68, 0.1)',
           border: '1px solid rgba(239, 68, 68, 0.3)',
           color: '#ef4444',
-          padding: '0.75rem',
+          padding: '0.75rem 1rem',
           borderRadius: '8px',
           fontSize: '0.85rem',
           marginBottom: '1.25rem',
+          textAlign: 'left'
         }}>
           ⚠️ {error}
+          {showMockFallback && (
+            <button
+              type="button"
+              onClick={handleBypassToMock}
+              className="btn-secondary"
+              style={{
+                marginTop: '0.75rem',
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                width: '100%',
+                backgroundColor: 'rgba(2, 94, 79, 0.05)',
+                color: '#025e4f',
+                border: '1px solid rgba(2, 94, 79, 0.15)',
+                fontWeight: '600',
+                cursor: 'pointer',
+                borderRadius: '6px'
+              }}
+            >
+              ⚙️ Bypass & Use Demo Mode OTP (Code: 123456)
+            </button>
+          )}
         </div>
       )}
 

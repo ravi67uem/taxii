@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import './BookingWidget.css';
+import { auth, isConfigured } from '@/lib/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export default function BookingWidget({ onSearchStart }) {
   // Tabs: 'airport', 'rental', 'local', 'outstation'
@@ -25,6 +27,9 @@ export default function BookingWidget({ onSearchStart }) {
   const [pickupCoords, setPickupCoords] = useState(null);
   const [dropCoords, setDropCoords] = useState(null);
 
+  // Vehicle Selection: 'go' (Hatchback), 'comfort' (Sedan), 'elite' (SUV)
+  const [selectedVehicle, setSelectedVehicle] = useState('go');
+
   // Map modal states
   const [mapModalOpen, setMapModalOpen] = useState(false);
   const [mapTargetField, setMapTargetField] = useState('pickup'); // 'pickup' or 'drop'
@@ -36,8 +41,18 @@ export default function BookingWidget({ onSearchStart }) {
 
   // UI state
   const [validationError, setValidationError] = useState('');
-  const [showFareModal, setShowFareModal] = useState(false);
-  const [estimatedFare, setEstimatedFare] = useState({ base: 0, tax: 0, total: 0 });
+
+  // Auto-prefill phone number if user is already logged in
+  useEffect(() => {
+    if (!isConfigured || !auth) return;
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser && currentUser.phoneNumber) {
+        const clean = currentUser.phoneNumber.replace('+91', '');
+        setPhone(clean);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   // Initialize Autocomplete for Input Fields
   useEffect(() => {
@@ -190,6 +205,223 @@ export default function BookingWidget({ onSearchStart }) {
     }
   };
 
+  // Helper: check if route fields are filled to show vehicle selector
+  const isRouteSelected = () => {
+    if (!pickup.trim()) return false;
+    if (activeTab === 'airport') {
+      if (airportSubTab === 'drop' && !dropTerminal) return false;
+      if (airportSubTab === 'pickup' && !pickupTerminal) return false;
+    } else if (activeTab === 'rental') {
+      if (!rentalPackage) return false;
+    } else {
+      if (!drop.trim()) return false;
+    }
+    return !!(date && time);
+  };
+
+  // Helper: calculate fare dynamically
+  const calculateFare = (vClass, tab, subTab, pkg) => {
+    let base = 0;
+    let tax = 0;
+
+    if (tab === 'airport') {
+      base = subTab === 'drop' ? 950 : 1150;
+      tax = 149;
+    } else if (tab === 'rental') {
+      if (pkg.includes('2')) base = 599;
+      else if (pkg.includes('4')) base = 1099;
+      else if (pkg.includes('8')) base = 1999;
+      else base = 2799;
+      tax = 99;
+    } else if (tab === 'local') {
+      base = 350;
+      tax = 49;
+    } else if (tab === 'outstation') {
+      base = subTab === 'oneway' ? 2499 : 4499;
+      tax = 299;
+    }
+
+    // Apply multipliers for vehicle classes
+    if (vClass === 'comfort') {
+      base = Math.round(base * 1.3);
+      tax = Math.round(tax * 1.3);
+    } else if (vClass === 'elite') {
+      base = Math.round(base * 1.8);
+      tax = Math.round(tax * 1.8);
+    }
+
+    return { base, tax, total: base + tax };
+  };
+
+  // Confirm booking & trigger Early Access OTP login/registration
+  const handleBookRide = async (e) => {
+    e.preventDefault();
+    setValidationError('');
+
+    // Validation
+    if (!pickup.trim()) {
+      setValidationError("Please select or enter your pickup location.");
+      return;
+    }
+
+    if (activeTab === 'airport') {
+      if (airportSubTab === 'drop' && !dropTerminal) {
+        setValidationError("Please select a drop terminal.");
+        return;
+      }
+      if (airportSubTab === 'pickup' && !pickupTerminal) {
+        setValidationError("Please select a pickup terminal.");
+        return;
+      }
+    } else if (activeTab === 'rental') {
+      if (!rentalPackage) {
+        setValidationError("Please select a rental duration package.");
+        return;
+      }
+    } else {
+      if (!drop.trim()) {
+        setValidationError("Please enter your drop-off destination.");
+        return;
+      }
+    }
+
+    if (!date) {
+      setValidationError("Please select a date for your journey.");
+      return;
+    }
+    if (!time) {
+      setValidationError("Please select a time for your journey.");
+      return;
+    }
+    if (!phone || phone.length !== 10) {
+      setValidationError("Please enter a valid 10-digit mobile number.");
+      return;
+    }
+
+    // Resolve coordinates in background if missing
+    let finalPickupCoords = pickupCoords;
+    let finalDropCoords = dropCoords;
+
+    if (window.google && window.google.maps) {
+      const geocoder = new window.google.maps.Geocoder();
+      
+      if (!finalPickupCoords) {
+        try {
+          const result = await new Promise((resolve) => {
+            geocoder.geocode({ address: pickup }, (res, status) => {
+              if (status === 'OK' && res[0] && res[0].geometry) {
+                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
+              } else {
+                resolve(null);
+              }
+            });
+          });
+          if (result) finalPickupCoords = result;
+        } catch (e) {
+          console.error("Geocoding failed for pickup:", e);
+        }
+      }
+
+      const targetDrop = activeTab === 'local' || activeTab === 'outstation' ? drop : '';
+      if (targetDrop && !finalDropCoords) {
+        try {
+          const result = await new Promise((resolve) => {
+            geocoder.geocode({ address: targetDrop }, (res, status) => {
+              if (status === 'OK' && res[0] && res[0].geometry) {
+                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
+              } else {
+                resolve(null);
+              }
+            });
+          });
+          if (result) finalDropCoords = result;
+        } catch (e) {
+          console.error("Geocoding failed for drop:", e);
+        }
+      }
+    }
+
+    setPickupCoords(finalPickupCoords);
+    setDropCoords(finalDropCoords);
+
+    // Get fare for chosen vehicle
+    const subTabVal = activeTab === 'airport' ? airportSubTab : outstationSubTab;
+    const fareDetails = calculateFare(selectedVehicle, activeTab, subTabVal, rentalPackage);
+
+    // Get human readable vehicle class
+    const vehicleNames = {
+      go: 'Taxii Go (Eco)',
+      comfort: 'Taxii Comfort (Sedan)',
+      elite: 'Taxii Elite (SUV)'
+    };
+
+    // Callback to parent to open early access modal
+    if (onSearchStart) {
+      onSearchStart({
+        phone,
+        pickup,
+        drop: activeTab === 'airport' 
+          ? (airportSubTab === 'drop' ? dropTerminal : pickupTerminal)
+          : (activeTab === 'rental' ? rentalPackage : drop),
+        date,
+        time,
+        fare: fareDetails.total,
+        tab: activeTab,
+        pickupCoords: finalPickupCoords,
+        dropCoords: activeTab === 'airport' || activeTab === 'rental' ? null : finalDropCoords,
+        vehicleClass: selectedVehicle,
+        vehicleName: vehicleNames[selectedVehicle]
+      });
+    }
+  };
+
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setValidationError('');
+    setPickup('');
+    setDrop('');
+    setDropTerminal('');
+    setPickupTerminal('');
+    setRentalPackage('');
+    setPickupCoords(null);
+    setDropCoords(null);
+  };
+
+  const triggerCurrentLocation = () => {
+    setValidationError('');
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setValidationError("Geolocation is not supported by your browser.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        setPickupCoords({ lat, lng });
+
+        if (window.google && window.google.maps) {
+          const geocoder = new window.google.maps.Geocoder();
+          geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+            if (status === 'OK' && results[0]) {
+              setPickup(results[0].formatted_address);
+              console.log("Current location resolved:", results[0].formatted_address, { lat, lng });
+            } else {
+              setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+            }
+          });
+        } else {
+          setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+        }
+      },
+      (err) => {
+        console.error("Geolocation error:", err);
+        setValidationError("Unable to access GPS location. Please check browser location permissions.");
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  };
+
   // SVG Icons
   const Icons = {
     Airport: (
@@ -254,199 +486,32 @@ export default function BookingWidget({ onSearchStart }) {
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="6 9 12 15 18 9" />
       </svg>
+    ),
+    Hatchback: (
+      <svg width="60" height="35" viewBox="0 0 60 35" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M5 24h50v4H5zm6-6.5C11 11 18 10 24 10c7 0 16 1.5 19 6l5 1.5c4 .5 5 2.5 5 4.5v2H7v-2c0-2 1-4.5 4-6.5z" fill="currentColor"/>
+        <circle cx="16" cy="27" r="5" fill="#18181b"/>
+        <circle cx="44" cy="27" r="5" fill="#18181b"/>
+      </svg>
+    ),
+    Sedan: (
+      <svg width="65" height="35" viewBox="0 0 65 35" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 24h59v4H3zM9 18c0-5 6-7 14-7h15c8 0 14 2 14 7l6 1c2.5.5 3 2 3 3.5v2.5H6V22.5c0-1.5.5-3 3-3.5l1-1z" fill="currentColor"/>
+        <circle cx="17" cy="27" r="5.5" fill="#18181b"/>
+        <circle cx="48" cy="27" r="5.5" fill="#18181b"/>
+      </svg>
+    ),
+    SUV: (
+      <svg width="65" height="38" viewBox="0 0 65 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M2 26h61v4H2zM8 20c0-6 6-9 15-9h18c7 0 12 2 14 6l4.5 1c2.5.5 2.5 2 2.5 4v4H6v-4c0-2 .5-3.5 2-4l1.5-1.5z" fill="currentColor"/>
+        <circle cx="16" cy="29" r="6" fill="#18181b"/>
+        <circle cx="49" cy="29" r="6" fill="#18181b"/>
+      </svg>
     )
   };
 
-  const handleTabChange = (tab) => {
-    setActiveTab(tab);
-    setValidationError('');
-    setPickup('');
-    setDrop('');
-    setDropTerminal('');
-    setPickupTerminal('');
-    setRentalPackage('');
-    setPickupCoords(null);
-    setDropCoords(null);
-  };
-
-  // Browser Geolocation trigger (with Google reverse geocoding)
-  const triggerCurrentLocation = () => {
-    setValidationError('');
-    if (typeof window === 'undefined' || !navigator.geolocation) {
-      setValidationError("Geolocation is not supported by your browser.");
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        setPickupCoords({ lat, lng });
-
-        if (window.google && window.google.maps) {
-          const geocoder = new window.google.maps.Geocoder();
-          geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-            if (status === 'OK' && results[0]) {
-              setPickup(results[0].formatted_address);
-              console.log("Current location resolved:", results[0].formatted_address, { lat, lng });
-            } else {
-              setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-            }
-          });
-        } else {
-          setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-        }
-      },
-      (err) => {
-        console.error("Geolocation error:", err);
-        setValidationError("Unable to access GPS location. Please check browser location permissions.");
-      },
-      { enableHighAccuracy: true, timeout: 5000 }
-    );
-  };
-
-  // Calculate Mock Fare
-  const handleCheckFare = async (e) => {
-    e.preventDefault();
-    setValidationError('');
-
-    // Validation
-    if (!pickup.trim()) {
-      setValidationError("Please select or enter your pickup location.");
-      return;
-    }
-
-    if (activeTab === 'airport') {
-      if (airportSubTab === 'drop' && !dropTerminal) {
-        setValidationError("Please select a drop terminal.");
-        return;
-      }
-      if (airportSubTab === 'pickup' && !pickupTerminal) {
-        setValidationError("Please select a pickup terminal.");
-        return;
-      }
-    } else if (activeTab === 'rental') {
-      if (!rentalPackage) {
-        setValidationError("Please select a rental duration package.");
-        return;
-      }
-    } else {
-      // local or outstation
-      if (!drop.trim()) {
-        setValidationError("Please enter your drop-off destination.");
-        return;
-      }
-    }
-
-    if (!date) {
-      setValidationError("Please select a date for your journey.");
-      return;
-    }
-    if (!time) {
-      setValidationError("Please select a time for your journey.");
-      return;
-    }
-    if (!phone || phone.length !== 10) {
-      setValidationError("Please enter a valid 10-digit mobile number.");
-      return;
-    }
-
-    // Geocode typed address if coordinates are missing (Fallback resolution)
-    let finalPickupCoords = pickupCoords;
-    let finalDropCoords = dropCoords;
-
-    if (window.google && window.google.maps) {
-      const geocoder = new window.google.maps.Geocoder();
-      
-      if (!finalPickupCoords) {
-        try {
-          const result = await new Promise((resolve) => {
-            geocoder.geocode({ address: pickup }, (res, status) => {
-              if (status === 'OK' && res[0] && res[0].geometry) {
-                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
-              } else {
-                resolve(null);
-              }
-            });
-          });
-          if (result) finalPickupCoords = result;
-        } catch (e) {
-          console.error("Geocoding failed for pickup:", e);
-        }
-      }
-
-      const targetDrop = activeTab === 'local' || activeTab === 'outstation' ? drop : '';
-      if (targetDrop && !finalDropCoords) {
-        try {
-          const result = await new Promise((resolve) => {
-            geocoder.geocode({ address: targetDrop }, (res, status) => {
-              if (status === 'OK' && res[0] && res[0].geometry) {
-                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
-              } else {
-                resolve(null);
-              }
-            });
-          });
-          if (result) finalDropCoords = result;
-        } catch (e) {
-          console.error("Geocoding failed for drop:", e);
-        }
-      }
-    }
-
-    // Store geocoded values back in state
-    setPickupCoords(finalPickupCoords);
-    setDropCoords(finalDropCoords);
-
-    // Calculate mock pricing
-    let base = 0;
-    let tax = 0;
-
-    if (activeTab === 'airport') {
-      base = airportSubTab === 'drop' ? 950 : 1150;
-      tax = 149;
-    } else if (activeTab === 'rental') {
-      if (rentalPackage.includes('2')) base = 599;
-      else if (rentalPackage.includes('4')) base = 1099;
-      else if (rentalPackage.includes('8')) base = 1999;
-      else base = 2799;
-      tax = 99;
-    } else if (activeTab === 'local') {
-      base = 350;
-      tax = 49;
-    } else if (activeTab === 'outstation') {
-      base = outstationSubTab === 'oneway' ? 2499 : 4499;
-      tax = 299;
-    }
-
-    setEstimatedFare({
-      base,
-      tax,
-      total: base + tax
-    });
-    setShowFareModal(true);
-  };
-
-  const handleConfirmBooking = () => {
-    setShowFareModal(false);
-    
-    // Callback to parent to open early access modal with coordinates included
-    if (onSearchStart) {
-      onSearchStart({
-        phone,
-        pickup,
-        drop: activeTab === 'airport' 
-          ? (airportSubTab === 'drop' ? dropTerminal : pickupTerminal)
-          : (activeTab === 'rental' ? rentalPackage : drop),
-        date,
-        time,
-        fare: estimatedFare.total,
-        tab: activeTab,
-        pickupCoords,
-        dropCoords: activeTab === 'airport' || activeTab === 'rental' ? null : dropCoords
-      });
-    }
-  };
+  const showVehicles = isRouteSelected();
+  const subTabVal = activeTab === 'airport' ? airportSubTab : outstationSubTab;
 
   return (
     <section className="booking-section">
@@ -559,7 +624,7 @@ export default function BookingWidget({ onSearchStart }) {
             </div>
           )}
 
-          <form onSubmit={handleCheckFare} style={{ width: '100%' }}>
+          <form onSubmit={handleBookRide} style={{ width: '100%' }}>
             
             {/* GRID OF FORM CONTROLS */}
             <div className="booking-grid">
@@ -697,7 +762,7 @@ export default function BookingWidget({ onSearchStart }) {
                   className="booking-field-input" 
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  min={new Date().toISOString().split('T')[0]} // Prevents past date selection
+                  min={new Date().toISOString().split('T')[0]} 
                   required
                 />
               </div>
@@ -716,122 +781,120 @@ export default function BookingWidget({ onSearchStart }) {
 
             </div>
 
-            {/* MOBILE INPUT SECTION */}
-            <div className="booking-mobile-block">
-              <label className="booking-mobile-label" htmlFor="booking-phone">Mobile Number *</label>
-              <div className="booking-mobile-input-wrapper">
-                <span className="booking-mobile-icon">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-                  </svg>
-                </span>
-                <span className="booking-mobile-prefix">+91</span>
-                <input 
-                  id="booking-phone"
-                  type="tel" 
-                  className="booking-mobile-input" 
-                  placeholder="Enter your mobile number"
-                  value={phone}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, ''); // digits only
-                    if (val.length <= 10) setPhone(val);
-                  }}
-                  required
-                />
-              </div>
-            </div>
+            {/* VEHICLE SELECTION GRID & PHONE BLOCKS (LOADED DYNAMICALLY) */}
+            {showVehicles ? (
+              <>
+                <div className="booking-vehicles-section">
+                  <span className="booking-vehicles-title">Select Ride Option</span>
+                  <div className="booking-vehicles-grid">
+                    
+                    {/* Taxii Go */}
+                    <div 
+                      className={`vehicle-card ${selectedVehicle === 'go' ? 'active' : ''}`}
+                      onClick={() => setSelectedVehicle('go')}
+                    >
+                      <div className="vehicle-icon-wrapper">{Icons.Hatchback}</div>
+                      <div className="vehicle-name">Taxii Go</div>
+                      <div className="vehicle-details">
+                        <span>🚴 4 Seats</span>
+                        <span>•</span>
+                        <span>💼 1 Bag</span>
+                      </div>
+                      <div className="vehicle-price">
+                        ₹{calculateFare('go', activeTab, subTabVal, rentalPackage).total}
+                      </div>
+                    </div>
 
-            {/* FARE CHECK SUBMIT */}
-            <div className="booking-action">
-              <button type="submit" className="btn-check-fare">
-                Check Fare
-              </button>
-            </div>
+                    {/* Taxii Comfort */}
+                    <div 
+                      className={`vehicle-card ${selectedVehicle === 'comfort' ? 'active' : ''}`}
+                      onClick={() => setSelectedVehicle('comfort')}
+                    >
+                      <div className="vehicle-icon-wrapper">{Icons.Sedan}</div>
+                      <div className="vehicle-name">Taxii Comfort</div>
+                      <div className="vehicle-details">
+                        <span>🚖 4 Seats</span>
+                        <span>•</span>
+                        <span>💼 2 Bags</span>
+                      </div>
+                      <div className="vehicle-price">
+                        ₹{calculateFare('comfort', activeTab, subTabVal, rentalPackage).total}
+                      </div>
+                    </div>
+
+                    {/* Taxii Elite */}
+                    <div 
+                      className={`vehicle-card ${selectedVehicle === 'elite' ? 'active' : ''}`}
+                      onClick={() => setSelectedVehicle('elite')}
+                    >
+                      <div className="vehicle-icon-wrapper">{Icons.SUV}</div>
+                      <div className="vehicle-name">Taxii Elite</div>
+                      <div className="vehicle-details">
+                        <span>🚙 6 Seats</span>
+                        <span>•</span>
+                        <span>💼 4 Bags</span>
+                      </div>
+                      <div className="vehicle-price">
+                        ₹{calculateFare('elite', activeTab, subTabVal, rentalPackage).total}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* MOBILE INPUT SECTION */}
+                <div className="booking-mobile-block">
+                  <label className="booking-mobile-label" htmlFor="booking-phone">Mobile Number *</label>
+                  <div className="booking-mobile-input-wrapper">
+                    <span className="booking-mobile-icon">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                      </svg>
+                    </span>
+                    <span className="booking-mobile-prefix">+91</span>
+                    <input 
+                      id="booking-phone"
+                      type="tel" 
+                      className="booking-mobile-input" 
+                      placeholder="Enter your mobile number"
+                      value={phone}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, ''); 
+                        if (val.length <= 10) setPhone(val);
+                      }}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* FARE CHECK SUBMIT */}
+                <div className="booking-action">
+                  <button type="submit" className="btn-check-fare">
+                    Lock Price & Book
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div style={{
+                width: '100%',
+                padding: '2rem 1.5rem',
+                backgroundColor: 'rgba(2, 94, 79, 0.02)',
+                border: '1px dashed rgba(2, 94, 79, 0.15)',
+                borderRadius: '12px',
+                fontSize: '0.85rem',
+                color: '#52525b',
+                boxSizing: 'border-box',
+                marginTop: '1rem',
+                marginBottom: '1rem'
+              }}>
+                ℹ️ Please fill in your pickup location, drop-off destination, and date/time above to view available vehicles and fare rates.
+              </div>
+            )}
 
           </form>
 
         </div>
       </div>
-
-      {/* ESTIMATED FARE DETAIL MODAL */}
-      {showFareModal && (
-        <div className="fare-modal-overlay" onClick={() => setShowFareModal(false)}>
-          <div className="fare-modal-card" onClick={(e) => e.stopPropagation()}>
-            <button 
-              type="button" 
-              className="btn-modal-close" 
-              onClick={() => setShowFareModal(false)}
-              aria-label="Close modal"
-            >
-              &times;
-            </button>
-            
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🎫</div>
-            <h4 className="fare-modal-title">Fare Estimate</h4>
-            <p className="fare-modal-subtitle">
-              For your upcoming journey on {new Date(date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })} at {time}
-            </p>
-
-            <div className="fare-details-list">
-              <div className="fare-detail-row">
-                <span>Trip Type:</span>
-                <span style={{ fontWeight: '700', textTransform: 'capitalize' }}>
-                  {activeTab} Rides {activeTab === 'airport' ? `(${airportSubTab === 'drop' ? 'Drop' : 'Pickup'})` : ''}
-                </span>
-              </div>
-              <div className="fare-detail-row">
-                <span>Pickup:</span>
-                <span style={{ fontWeight: '600', maxWidth: '250px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={pickup}>
-                  {pickup}
-                </span>
-              </div>
-              {pickupCoords && (
-                <div style={{ fontSize: '0.75rem', color: '#71717a', textAlign: 'left', marginTop: '-0.5rem', marginBottom: '0.5rem', paddingLeft: '0.5rem' }}>
-                  Coordinates: {pickupCoords.lat.toFixed(5)}, {pickupCoords.lng.toFixed(5)}
-                </div>
-              )}
-              {((activeTab === 'local' || activeTab === 'outstation') && drop) && (
-                <div className="fare-detail-row">
-                  <span>Drop-off:</span>
-                  <span style={{ fontWeight: '600', maxWidth: '250px', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }} title={drop}>
-                    {drop}
-                  </span>
-                </div>
-              )}
-              {dropCoords && (
-                <div style={{ fontSize: '0.75rem', color: '#71717a', textAlign: 'left', marginTop: '-0.5rem', marginBottom: '0.5rem', paddingLeft: '0.5rem' }}>
-                  Coordinates: {dropCoords.lat.toFixed(5)}, {dropCoords.lng.toFixed(5)}
-                </div>
-              )}
-              <div className="fare-detail-row">
-                <span>Base Fare:</span>
-                <span>₹{estimatedFare.base}</span>
-              </div>
-              <div className="fare-detail-row">
-                <span>Tolls & Taxes:</span>
-                <span>₹{estimatedFare.tax}</span>
-              </div>
-              <div className="fare-detail-row total">
-                <span>Estimated Total:</span>
-                <span>₹{estimatedFare.total}</span>
-              </div>
-            </div>
-
-            <p style={{ fontSize: '0.75rem', color: '#71717a', marginBottom: '1.5rem', lineHeight: '1.4' }}>
-              Verify your mobile number via secure SMS OTP to lock this guaranteed price and confirm your booking.
-            </p>
-
-            <button 
-              type="button" 
-              className="btn-get-started" 
-              onClick={handleConfirmBooking}
-              style={{ width: '100%', padding: '0.85rem' }}
-            >
-              Lock Price & Book
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* GOOGLE MAPS INTERACTIVE PIN PICKER MODAL */}
       {mapModalOpen && (

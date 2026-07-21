@@ -16,7 +16,9 @@ export async function POST(request) {
       tab, 
       pickupCoords, 
       dropCoords, 
-      uid 
+      uid,
+      vehicleClass,
+      vehicleName
     } = body;
 
     // Validation
@@ -38,24 +40,34 @@ export async function POST(request) {
       tab,
       pickupCoords: pickupCoords || null,
       dropCoords: dropCoords || null,
+      vehicleClass: vehicleClass || 'go',
+      vehicleName: vehicleName || 'Taxii Go (Eco)',
+      paymentStatus: 'pending',
+      rideStatus: 'pending',
       createdAt: new Date().toISOString(),
     };
+
+    let bookingId = `booking_mock_${Date.now()}`;
 
     if (clientPromise) {
       const client = await clientPromise;
       const db = client.db('taxii');
-      await db.collection('bookings').insertOne(bookingData);
-      console.log(`Saved new booking to MongoDB for phone: ${phone}`);
+      const result = await db.collection('bookings').insertOne(bookingData);
+      bookingId = result.insertedId.toString();
+      bookingData._id = bookingId;
+      console.log(`Saved new booking to MongoDB: ${bookingId}`);
     } else {
       // Mock db insertion
       global._mockBookings = global._mockBookings || [];
+      bookingData._id = bookingId;
       global._mockBookings.push(bookingData);
-      console.log(`Saved new booking to Server Memory (Mock DB) for phone: ${phone}`);
+      console.log(`Saved new booking to Server Memory (Mock DB): ${bookingId}`);
     }
 
     return NextResponse.json({
       success: true,
       message: "Booking confirmed successfully!",
+      bookingId,
       booking: bookingData
     }, { status: 201 });
 
