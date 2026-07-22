@@ -34,8 +34,15 @@ if (isConfigured) {
     storage = getStorage(app);
     db = getFirestore(app);
     if (typeof window !== 'undefined') {
-      const { getAnalytics } = require('firebase/analytics');
-      analytics = getAnalytics(app);
+      const { getAnalytics, isSupported } = require('firebase/analytics');
+      isSupported().then((supported) => {
+        if (supported) {
+          analytics = getAnalytics(app);
+          console.log("Firebase Analytics initialized successfully.");
+        }
+      }).catch(err => {
+        console.warn("Firebase Analytics is not supported in this environment:", err);
+      });
     }
   } catch (error) {
     console.error("Failed to initialize Firebase SDK:", error);

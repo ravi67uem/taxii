@@ -54,63 +54,81 @@ export default function BookingWidget({ onSearchStart }) {
     return () => unsubscribe();
   }, []);
 
-  // Initialize Autocomplete for Input Fields
+  const [pickupSuggestions, setPickupSuggestions] = useState([]);
+  const [dropSuggestions, setDropSuggestions] = useState([]);
+  const [activeSuggestionField, setActiveSuggestionField] = useState(null); // 'pickup' or 'drop'
+  const [searchTimeout, setSearchTimeout] = useState(null);
+
+  // Close suggestions when click outside
   useEffect(() => {
-    let pickupAutocomplete = null;
-    let dropAutocomplete = null;
-
-    if (typeof window !== 'undefined' && window.google && window.google.maps) {
-      if (pickupInputRef.current) {
-        pickupAutocomplete = new window.google.maps.places.Autocomplete(pickupInputRef.current, {
-          types: ['geocode', 'establishment'],
-          componentRestrictions: { country: 'in' }
-        });
-        pickupAutocomplete.addListener('place_changed', () => {
-          const place = pickupAutocomplete.getPlace();
-          if (place && place.geometry && place.geometry.location) {
-            setPickup(place.formatted_address || place.name);
-            setPickupCoords({
-              lat: place.geometry.location.lat(),
-              lng: place.geometry.location.lng()
-            });
-            setValidationError('');
-          }
-        });
-      }
-
-      if (dropInputRef.current) {
-        dropAutocomplete = new window.google.maps.places.Autocomplete(dropInputRef.current, {
-          types: ['geocode', 'establishment'],
-          componentRestrictions: { country: 'in' }
-        });
-        dropAutocomplete.addListener('place_changed', () => {
-          const place = dropAutocomplete.getPlace();
-          if (place && place.geometry && place.geometry.location) {
-            setDrop(place.formatted_address || place.name);
-            setDropCoords({
-              lat: place.geometry.location.lat(),
-              lng: place.geometry.location.lng()
-            });
-            setValidationError('');
-          }
-        });
-      }
+    const handleOutsideClick = () => {
+      setPickupSuggestions([]);
+      setDropSuggestions([]);
+      setActiveSuggestionField(null);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('click', handleOutsideClick);
     }
-
     return () => {
-      // Clean up autocomplete listeners
-      if (pickupAutocomplete && window.google?.maps?.event) {
-        window.google.maps.event.clearInstanceListeners(pickupAutocomplete);
-      }
-      if (dropAutocomplete && window.google?.maps?.event) {
-        window.google.maps.event.clearInstanceListeners(dropAutocomplete);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('click', handleOutsideClick);
       }
     };
-  }, [activeTab]);
+  }, []);
+
+  const fetchSuggestions = (queryStr, field) => {
+    if (searchTimeout) clearTimeout(searchTimeout);
+    
+    if (!queryStr || queryStr.trim().length < 3) {
+      if (field === 'pickup') setPickupSuggestions([]);
+      if (field === 'drop') setDropSuggestions([]);
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryStr)}&limit=5&countrycodes=in`);
+        if (res.ok) {
+          const data = await res.json();
+          if (field === 'pickup') {
+            setPickupSuggestions(data);
+            setActiveSuggestionField('pickup');
+          } else {
+            setDropSuggestions(data);
+            setActiveSuggestionField('drop');
+          }
+        }
+      } catch (err) {
+        console.error("Nominatim search failed:", err);
+      }
+    }, 450);
+
+    setSearchTimeout(timeout);
+  };
+
+  const handleSelectPickupSuggestion = (item) => {
+    setPickup(item.display_name);
+    setPickupCoords({
+      lat: parseFloat(item.lat),
+      lng: parseFloat(item.lon)
+    });
+    setPickupSuggestions([]);
+    setActiveSuggestionField(null);
+  };
+
+  const handleSelectDropSuggestion = (item) => {
+    setDrop(item.display_name);
+    setDropCoords({
+      lat: parseFloat(item.lat),
+      lng: parseFloat(item.lon)
+    });
+    setDropSuggestions([]);
+    setActiveSuggestionField(null);
+  };
 
   // Handle Map Modal Mounting and Init
   const initMap = () => {
-    if (typeof window === 'undefined' || !window.google || !window.google.maps) return;
+    if (typeof window === 'undefined' || !window.L) return;
 
     // Default map center (Patna coordinates or selected location coords if set)
     const initialCoords = mapTargetField === 'pickup'
@@ -120,33 +138,49 @@ export default function BookingWidget({ onSearchStart }) {
     const mapElement = document.getElementById('booking-map');
     if (!mapElement) return;
 
-    const mapInstance = new window.google.maps.Map(mapElement, {
-      center: initialCoords,
-      zoom: 15,
-      mapTypeControl: false,
-      streetViewControl: false,
-      fullscreenControl: false
-    });
+    // Clean up old instance to avoid leaflet container re-initialization error
+    if (window._leafletMap) {
+      try {
+        window._leafletMap.remove();
+      } catch (e) {
+        console.warn("Leaflet previous instance remove failed:", e);
+      }
+      window._leafletMap = null;
+    }
 
-    const markerInstance = new window.google.maps.Marker({
-      position: initialCoords,
-      map: mapInstance,
-      draggable: true,
-      title: "Drag to pin exact location"
+    // Configure default CDN marker icons
+    const DefaultIcon = window.L.icon({
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41]
     });
+    window.L.Marker.prototype.options.icon = DefaultIcon;
+
+    const mapInstance = window.L.map(mapElement).setView([initialCoords.lat, initialCoords.lng], 15);
+    window._leafletMap = mapInstance;
+
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(mapInstance);
+
+    const markerInstance = window.L.marker([initialCoords.lat, initialCoords.lng], {
+      draggable: true
+    }).addTo(mapInstance);
 
     let tempCoords = { ...initialCoords };
 
     // Move marker when clicking on the map
-    mapInstance.addListener('click', (e) => {
-      const clickedCoords = { lat: e.latLng.lat(), lng: e.latLng.lng() };
-      markerInstance.setPosition(clickedCoords);
+    mapInstance.on('click', (e) => {
+      const clickedCoords = { lat: e.latlng.lat, lng: e.latlng.lng };
+      markerInstance.setLatLng([clickedCoords.lat, clickedCoords.lng]);
       tempCoords = clickedCoords;
     });
 
     // Capture drag coordinate results
-    markerInstance.addListener('dragend', (e) => {
-      const draggedCoords = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+    markerInstance.on('dragend', (e) => {
+      const draggedCoords = { lat: e.target.getLatLng().lat, lng: e.target.getLatLng().lng };
       tempCoords = draggedCoords;
     });
 
@@ -184,25 +218,30 @@ export default function BookingWidget({ onSearchStart }) {
 
     setMapModalOpen(false);
 
-    if (window.google && window.google.maps) {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ location: coords }, (results, status) => {
-        if (status === 'OK' && results[0]) {
-          if (mapTargetField === 'pickup') {
-            setPickup(results[0].formatted_address);
-          } else {
-            setDrop(results[0].formatted_address);
-          }
-        } else {
-          const fallback = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
-          if (mapTargetField === 'pickup') {
-            setPickup(fallback);
-          } else {
-            setDrop(fallback);
-          }
-        }
-      });
-    }
+    // Call Nominatim API for reverse geocoding
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}&zoom=18&addressdetails=1`, {
+      headers: {
+        'Accept-Language': 'en'
+      }
+    })
+    .then(res => res.json())
+    .then(data => {
+      const resolvedAddress = data.display_name || `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+      if (mapTargetField === 'pickup') {
+        setPickup(resolvedAddress);
+      } else {
+        setDrop(resolvedAddress);
+      }
+    })
+    .catch(err => {
+      console.error("Reverse geocoding error:", err);
+      const fallback = `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+      if (mapTargetField === 'pickup') {
+        setPickup(fallback);
+      } else {
+        setDrop(fallback);
+      }
+    });
   };
 
   // Helper: check if route fields are filled to show vehicle selector
@@ -298,47 +337,34 @@ export default function BookingWidget({ onSearchStart }) {
       return;
     }
 
-    // Resolve coordinates in background if missing
+    // Resolve coordinates in background if missing via Nominatim API
     let finalPickupCoords = pickupCoords;
     let finalDropCoords = dropCoords;
 
-    if (window.google && window.google.maps) {
-      const geocoder = new window.google.maps.Geocoder();
-      
-      if (!finalPickupCoords) {
-        try {
-          const result = await new Promise((resolve) => {
-            geocoder.geocode({ address: pickup }, (res, status) => {
-              if (status === 'OK' && res[0] && res[0].geometry) {
-                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
-              } else {
-                resolve(null);
-              }
-            });
-          });
-          if (result) finalPickupCoords = result;
-        } catch (e) {
-          console.error("Geocoding failed for pickup:", e);
+    const resolveAddressCoords = async (address) => {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&countrycodes=in`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data[0]) {
+            return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+          }
         }
+      } catch (e) {
+        console.error("Nominatim geocode failed:", e);
       }
+      return null;
+    };
 
-      const targetDrop = activeTab === 'local' || activeTab === 'outstation' ? drop : '';
-      if (targetDrop && !finalDropCoords) {
-        try {
-          const result = await new Promise((resolve) => {
-            geocoder.geocode({ address: targetDrop }, (res, status) => {
-              if (status === 'OK' && res[0] && res[0].geometry) {
-                resolve({ lat: res[0].geometry.location.lat(), lng: res[0].geometry.location.lng() });
-              } else {
-                resolve(null);
-              }
-            });
-          });
-          if (result) finalDropCoords = result;
-        } catch (e) {
-          console.error("Geocoding failed for drop:", e);
-        }
-      }
+    if (!finalPickupCoords) {
+      const result = await resolveAddressCoords(pickup);
+      if (result) finalPickupCoords = result;
+    }
+
+    const targetDrop = activeTab === 'local' || activeTab === 'outstation' ? drop : '';
+    if (targetDrop && !finalDropCoords) {
+      const result = await resolveAddressCoords(targetDrop);
+      if (result) finalDropCoords = result;
     }
 
     setPickupCoords(finalPickupCoords);
@@ -400,19 +426,21 @@ export default function BookingWidget({ onSearchStart }) {
         const lng = position.coords.longitude;
         setPickupCoords({ lat, lng });
 
-        if (window.google && window.google.maps) {
-          const geocoder = new window.google.maps.Geocoder();
-          geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-            if (status === 'OK' && results[0]) {
-              setPickup(results[0].formatted_address);
-              console.log("Current location resolved:", results[0].formatted_address, { lat, lng });
-            } else {
-              setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-            }
-          });
-        } else {
+        // Call Nominatim API for reverse geocoding
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
+          headers: {
+            'Accept-Language': 'en'
+          }
+        })
+        .then(res => res.json())
+        .then(data => {
+          setPickup(data.display_name || `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          console.log("Current location resolved:", data.display_name, { lat, lng });
+        })
+        .catch(err => {
+          console.error("Geolocation reverse geocoding error:", err);
           setPickup(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
-        }
+        });
       },
       (err) => {
         console.error("Geolocation error:", err);
@@ -630,7 +658,7 @@ export default function BookingWidget({ onSearchStart }) {
             <div className="booking-grid">
               
               {/* Pickup Location */}
-              <div className="booking-field">
+              <div className="booking-field" style={{ position: 'relative' }}>
                 <span className="booking-field-icon">{Icons.Pin}</span>
                 <input 
                   ref={pickupInputRef}
@@ -638,7 +666,14 @@ export default function BookingWidget({ onSearchStart }) {
                   className="booking-field-input" 
                   placeholder="Pickup Location"
                   value={pickup}
-                  onChange={(e) => setPickup(e.target.value)}
+                  onChange={(e) => {
+                    setPickup(e.target.value);
+                    fetchSuggestions(e.target.value, 'pickup');
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (pickupSuggestions.length > 0) setActiveSuggestionField('pickup');
+                  }}
                   required
                 />
                 <button 
@@ -663,6 +698,21 @@ export default function BookingWidget({ onSearchStart }) {
                 >
                   {Icons.Target}
                 </button>
+
+                {pickupSuggestions.length > 0 && activeSuggestionField === 'pickup' && (
+                  <div className="autocomplete-suggestions" onClick={(e) => e.stopPropagation()}>
+                    {pickupSuggestions.map((item, idx) => (
+                      <div 
+                        key={idx} 
+                        className="suggestion-item" 
+                        onClick={() => handleSelectPickupSuggestion(item)}
+                      >
+                        <span style={{ marginRight: '0.5rem' }}>📍</span>
+                        <span className="suggestion-text">{item.display_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Dynamic Destination / Drop selection based on tab */}
@@ -728,7 +778,7 @@ export default function BookingWidget({ onSearchStart }) {
               )}
 
               {(activeTab === 'local' || activeTab === 'outstation') && (
-                <div className="booking-field">
+                <div className="booking-field" style={{ position: 'relative' }}>
                   <span className="booking-field-icon">{Icons.Pin}</span>
                   <input 
                     ref={dropInputRef}
@@ -736,7 +786,14 @@ export default function BookingWidget({ onSearchStart }) {
                     className="booking-field-input" 
                     placeholder="Select Drop Location"
                     value={drop}
-                    onChange={(e) => setDrop(e.target.value)}
+                    onChange={(e) => {
+                      setDrop(e.target.value);
+                      fetchSuggestions(e.target.value, 'drop');
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (dropSuggestions.length > 0) setActiveSuggestionField('drop');
+                    }}
                     required
                   />
                   <button 
@@ -751,6 +808,21 @@ export default function BookingWidget({ onSearchStart }) {
                       <path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z"/>
                     </svg>
                   </button>
+
+                  {dropSuggestions.length > 0 && activeSuggestionField === 'drop' && (
+                    <div className="autocomplete-suggestions" onClick={(e) => e.stopPropagation()}>
+                      {dropSuggestions.map((item, idx) => (
+                        <div 
+                          key={idx} 
+                          className="suggestion-item" 
+                          onClick={() => handleSelectDropSuggestion(item)}
+                        >
+                          <span style={{ marginRight: '0.5rem' }}>📍</span>
+                          <span className="suggestion-text">{item.display_name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

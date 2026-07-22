@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
-import { db, isConfigured } from '@/lib/firebase';
+import { db, auth, isConfigured } from '@/lib/firebase';
 import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 
 export default function AdminDashboardPage() {
@@ -25,11 +25,24 @@ export default function AdminDashboardPage() {
     if (typeof window === 'undefined') return;
 
     const token = localStorage.getItem('adminToken');
-    if (token !== 'taxii_session_token_2026') {
-      router.push('/admin/login');
-    } else {
+    if (token === 'taxii_session_token_2026') {
       setAuthorized(true);
       loadDashboardData();
+    } else {
+      if (!isConfigured || !auth) {
+        router.push('/admin/login');
+        return;
+      }
+      const { onAuthStateChanged } = require('firebase/auth');
+      const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        if (currentUser && (currentUser.phoneNumber === '+918409251542' || currentUser.phoneNumber === '8409251542')) {
+          setAuthorized(true);
+          loadDashboardData();
+        } else {
+          router.push('/admin/login');
+        }
+      });
+      return () => unsubscribe();
     }
   }, []);
 

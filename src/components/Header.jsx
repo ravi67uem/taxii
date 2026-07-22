@@ -46,6 +46,25 @@ export default function Header({ openModal }) {
         <div className="header-cta">
           {user ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              {user && (user.phoneNumber === '+918409251542' || user.phoneNumber === '8409251542') && (
+                <Link href="/admin/dashboard" style={{
+                  fontSize: '0.85rem',
+                  fontWeight: '700',
+                  color: '#7bb928',
+                  textDecoration: 'none',
+                  border: '1px solid #7bb928',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  transition: 'all 0.2s ease',
+                  backgroundColor: 'rgba(123, 185, 40, 0.05)',
+                  cursor: 'pointer'
+                }} className="admin-header-link">
+                  🛠️ Admin
+                </Link>
+              )}
               <div 
                 onClick={() => router.push('/history')}
                 style={{ 

@@ -414,47 +414,6 @@ export default function RegistrationForm({ onSuccess, onSwitchMode, isLoginMode 
         <form onSubmit={handleSendOtp}>
           {!isLoginMode && (
             <>
-              {/* Role Picker */}
-              <div style={{ marginBottom: '1.25rem' }}>
-                <span className="form-label">Are you registering as a Rider or Driver?</span>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => setRole('rider')}
-                    style={{
-                      padding: '0.6rem',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      fontWeight: '600',
-                      border: role === 'rider' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
-                      backgroundColor: role === 'rider' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
-                      color: role === 'rider' ? 'var(--primary)' : 'var(--text-main)',
-                      transition: 'var(--transition-smooth)'
-                    }}
-                  >
-                    🚴 Rider / Passenger
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRole('driver')}
-                    style={{
-                      padding: '0.6rem',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontSize: '0.9rem',
-                      fontWeight: '600',
-                      border: role === 'driver' ? '1px solid var(--primary)' : '1px solid var(--glass-border)',
-                      backgroundColor: role === 'driver' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
-                      color: role === 'driver' ? 'var(--primary)' : 'var(--text-main)',
-                      transition: 'var(--transition-smooth)'
-                    }}
-                  >
-                    🚖 Fleet Partner / Driver
-                  </button>
-                </div>
-              </div>
-
               <div className="form-group">
                 <label className="form-label" htmlFor="reg-name">Full Name</label>
                 <input

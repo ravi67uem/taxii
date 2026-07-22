@@ -16,6 +16,7 @@ export default function HomePage() {
   const [prefilledPhone, setPrefilledPhone] = useState('');
   const [pendingBooking, setPendingBooking] = useState(null);
   const [successBookingMessage, setSuccessBookingMessage] = useState('');
+  const [bookingWidgetKey, setBookingWidgetKey] = useState(0);
   const [faqOpen, setFaqOpen] = useState({ 0: true });
 
   // Payment method selection modal state
@@ -113,6 +114,7 @@ export default function HomePage() {
     setPendingBooking(null);
     setShowPaymentModal(false);
     setModalOpen(false);
+    setBookingWidgetKey(prev => prev + 1);
   };
 
   const handleMockPayConfirm = async () => {
@@ -195,6 +197,7 @@ export default function HomePage() {
       );
       setPendingBooking(null);
       setModalOpen(false);
+      setBookingWidgetKey(prev => prev + 1);
       return;
     }
 
@@ -369,7 +372,7 @@ export default function HomePage() {
       </section>
 
       {/* BOOKING SEARCH SECTION */}
-      <BookingWidget onSearchStart={handleBookingSearchStart} />
+      <BookingWidget key={bookingWidgetKey} onSearchStart={handleBookingSearchStart} />
 
       {/* VALUE PROPOSITION / FEATURES SECTION */}
       <section id="about" className="features-section">

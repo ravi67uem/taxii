@@ -118,7 +118,7 @@ export default function ContactPage() {
                 <div>
                   <h4 style={{ margin: '0 0 0.25rem 0', fontWeight: '700' }}>Email Support</h4>
                   <p style={{ margin: 0, color: '#025e4f', fontSize: '0.9rem', fontWeight: '600' }}>
-                    support@thetaxii.com
+                    thetaxiiofficial@gmail.com
                   </p>
                 </div>
               </div>
